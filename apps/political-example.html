@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>County Choropleth Example</title>
+<style>
+  :root{--bg:#f3f1ea;--fg:#221f1b;--muted:#6c665b;--panel:rgba(252,251,247,.95);--line:#dcd6c8;--font:"Overpass",system-ui,sans-serif}
+  @media (prefers-color-scheme:dark){:root{--bg:#1b1e22;--fg:#ecebe4;--muted:#a3a197;--panel:rgba(34,38,43,.95);--line:#363b42;color-scheme:dark}}
+  html,body{height:100%;margin:0}body{background:var(--bg);color:var(--fg);font:14px/1.4 var(--font)}
+  #map{position:absolute;inset:0}
+  .panel{position:absolute;top:16px;left:16px;z-index:5;width:300px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;backdrop-filter:blur(8px)}
+  h1{font-size:15px;margin:0 0 4px}.sub{color:var(--muted);font-size:12px;margin-bottom:10px}
+  select,button{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 8px;width:100%;margin-top:6px}
+  .legend{margin-top:12px}
+  .tt{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-family:var(--font)}
+  .tt b{display:block}.tt span{color:var(--muted);font-size:12px}
+  code{font-size:12px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <h1>County choropleth example</h1>
+  <div class="sub">A template for polling and election maps. The numbers below are <b>synthetic</b> (seeded noise), so the code path is real but the data is not.</div>
+  <label>View
+    <select id="view">
+      <option value="margin">Two-way margin (diverging)</option>
+      <option value="turnout">Turnout % (sequential)</option>
+      <option value="winner">Winner (categorical)</option>
+      <option value="classes">Margin classes (threshold)</option>
+    </select>
+  </label>
+  <button id="fit">Reset view</button>
+  <div class="legend" id="legend"></div>
+  <div class="sub" style="margin-top:10px">Swap <code>loadResults()</code> for a fetch of your own CSV/JSON keyed by FIPS. See <code>docs/POLITICAL.md</code>.</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+<script src="../engine/maplibre-css.js"></script>
+<script src="../engine/usmap.js"></script>
+<script>
+(async () => {
+  // 1. Build the map. Basemap layers can be thinned for a thematic map; here roads are limited to the major tier.
+  const m = await USMap.create({
+    container: '#map', dataRoot: '../data/', states: '50dc',
+    layers: { roads: 'major', urban: false, countyLabels: true },
+    fitPadding: { top: 30, bottom: 30, left: 340, right: 40 },
+    tooltip: c => { const r = results[c.fips]; return r ? `<div class="tt"><b>${c.name}, ${c.stateAbbr}</b><span>D ${r.dem.toFixed(1)}% · R ${r.rep.toFixed(1)}% · turnout ${r.turnout.toFixed(0)}%</span></div>` : null; },
+  });
+
+  // 2. Load results keyed by 5-digit FIPS. Replace this with fetch('results.json') / a CSV parser.
+  function loadResults() {
+    const out = {}; let seed = 7;
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (const c of m.index.counties.values()) {
+      const urbanLean = Math.min(1, 2000 / Math.max(50, c.areaSqMi));           // smaller counties lean blue in the fake data
+      const regional = Math.sin(c.lon / 9) * 0.15 + Math.cos(c.lat / 5) * 0.1;  // smooth regional swing
+      const dem = 50 + (urbanLean - 0.5) * 30 + regional * 100 + (rnd() - 0.5) * 20;
+      out[c.fips] = { dem: Math.max(5, Math.min(95, dem)), rep: 100 - Math.max(5, Math.min(95, dem)), turnout: 45 + rnd() * 35 };
+    }
+    return out;
+  }
+  const results = loadResults();
+  const margin = {}; const turnout = {}; const winner = {};
+  for (const [f, r] of Object.entries(results)) { margin[f] = r.dem - r.rep; turnout[f] = r.turnout; winner[f] = r.dem > r.rep ? 'D' : 'R'; }
+
+  // 3. Views: each is a scale + a value map. USMap.legend draws the matching legend.
+  const views = {
+    margin: { values: margin, scale: USMap.scale.diverging([-60, 0, 60], USMap.palettes.redBlue), title: 'Margin (D − R, pts)', format: v => (v > 0 ? '+' : '') + v },
+    turnout: { values: turnout, scale: USMap.scale.sequential([40, 80], USMap.palettes.teal), title: 'Turnout', format: v => v + '%' },
+    winner: { values: winner, scale: USMap.scale.categorical({ D: USMap.palettes.party.D, R: USMap.palettes.party.R }), title: 'Winner', labels: { D: 'Democrat', R: 'Republican' } },
+    classes: { values: margin, scale: USMap.scale.threshold([-30, -10, 0, 10, 30], ['#b2182b', '#ef8a62', '#fddbc7', '#d1e5f0', '#67a9cf', '#2166ac']), title: 'Margin classes', format: v => (v > 0 ? '+' : '') + v },
+  };
+  const show = key => { const v = views[key]; m.setCountyValues(v.values, { scale: v.scale, opacity: 0.75 }); USMap.legend('#legend', v); };
+  show('margin');
+  document.getElementById('view').addEventListener('change', e => show(e.target.value));
+  document.getElementById('fit').addEventListener('click', () => m.fitUS());
+  m.on('county:click', e => { m.select(e.fips); m.flyToCounty(e.fips, { maxZoom: 8 }); });
+})();
+</script>
+</body>
+</html>

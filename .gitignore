@@ -1,0 +1,4 @@
+# downloaded sources and build scratch for pipeline/build-data.sh (300 MB; regenerated on demand)
+pipeline/.work/
+node_modules/
+.DS_Store

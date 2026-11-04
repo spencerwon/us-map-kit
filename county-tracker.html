@@ -1,0 +1,493 @@
+<title>Spencer's County Log</title>
+<meta charset="utf-8">
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;700;800&family=Overpass+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: one full-height map; a floating log drawer on the left (bottom sheet on phones);
+   a slim progress strip across the top that doubles as the page header. */
+:root{
+  --bg:#f3f1ea; --panel:rgba(252,251,247,.94); --panel-solid:#fcfbf7; --fg:#221f1b; --muted:#6c665b; --line:#dcd6c8; --line-strong:#b8b1a1;
+  --visited:#1f9c86; --visited-fill:#2aa392; --passed:#5aa5d8; --passed-fill:#7ab8e3; --accent:#1f9c86; --accent-ink:#fff;
+  --danger:#c0392b; --shadow:0 6px 24px rgba(40,30,10,.14); --radius:14px;
+  --font:"Overpass",ui-sans-serif,system-ui,sans-serif; --mono:"Overpass Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#1b1e22; --panel:rgba(34,38,43,.94); --panel-solid:#22262b; --fg:#ecebe4; --muted:#a3a197; --line:#363b42; --line-strong:#4a505a;
+  --visited:#3fc9b1; --visited-fill:#36b9a3; --passed:#6fb3e0; --passed-fill:#5aa0d0; --accent:#3fc9b1; --accent-ink:#0f1a18;
+  --danger:#ff7b6b; --shadow:0 8px 28px rgba(0,0,0,.45); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#1b1e22; --panel:rgba(34,38,43,.94); --panel-solid:#22262b; --fg:#ecebe4; --muted:#a3a197; --line:#363b42; --line-strong:#4a505a;
+  --visited:#3fc9b1; --visited-fill:#36b9a3; --passed:#6fb3e0; --passed-fill:#5aa0d0; --accent:#3fc9b1; --accent-ink:#0f1a18;
+  --danger:#ff7b6b; --shadow:0 8px 28px rgba(0,0,0,.45); color-scheme:dark}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 var(--font);overflow:hidden}
+*{box-sizing:border-box}
+button,input{font:inherit;color:inherit}
+#map{position:absolute;inset:0}
+#map .maplibregl-ctrl-bottom-right{margin-bottom:max(10px,env(safe-area-inset-bottom,0px))}
+#map .maplibregl-ctrl-bottom-left{margin-left:max(8px,env(safe-area-inset-left,0px))}
+
+/* progress strip */
+.strip{position:absolute;top:0;left:0;right:0;height:4px;background:color-mix(in srgb,var(--line) 60%,transparent);z-index:6}
+.strip i{display:block;height:100%;background:var(--visited);width:0;transition:width .5s cubic-bezier(.2,.8,.2,1)}
+.strip b{display:block;height:100%;background:var(--passed);width:0;position:absolute;top:0;transition:left .5s,width .5s}
+
+/* drawer */
+.drawer{position:absolute;z-index:5;top:16px;left:max(16px,env(safe-area-inset-left,0px));width:min(360px,calc(100vw - 32px));max-height:calc(100% - 32px);
+  display:flex;flex-direction:column;background:var(--panel);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+.drawer .scroll{overflow:auto;overscroll-behavior:contain;min-height:0;padding:0 16px 14px}
+.head{padding:14px 16px 10px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:flex-start}
+.head .name{font-weight:800;font-size:15px;letter-spacing:.01em;line-height:1.1;margin:0 0 2px}
+.head .sub{color:var(--muted);font-size:12px}
+.count{display:flex;align-items:baseline;gap:6px;margin-top:6px}
+.count .big{font:800 34px/1 var(--font);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.count .of{color:var(--muted);font-size:13px}
+.kpis{display:flex;gap:14px;margin-top:6px;font-size:12px;color:var(--muted)}
+.kpis b{color:var(--fg);font-family:var(--mono);font-weight:700}
+.kpis .dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.kpis .pip{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);vertical-align:0}.kpis .pip.ok{background:var(--visited)}.kpis .pip.warn{background:#e0a21d}
+.toggle-btn{margin-left:auto;flex:none;width:32px;height:32px;border:1px solid var(--line);border-radius:9px;background:transparent;cursor:pointer;display:none;align-items:center;justify-content:center}
+.toggle-btn svg{width:16px;height:16px;transition:transform .25s}
+h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px;font-weight:700}
+.search{position:relative}
+.search input{width:100%;padding:10px 12px 9px 36px;border:1px solid var(--line-strong);border-radius:10px;background:var(--panel-solid);outline:none}
+.search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+.search svg{position:absolute;left:12px;top:11px;width:16px;height:16px;color:var(--muted)}
+.results{position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--panel-solid);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);z-index:9;overflow:hidden}
+.results button{display:block;width:100%;text-align:left;padding:8px 12px;border:0;background:none;cursor:pointer;border-bottom:1px solid var(--line)}
+.results button:last-child{border-bottom:0}
+.results button:hover,.results button.active{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.results .l{font-weight:600}.results .s{font-size:12px;color:var(--muted)}
+.seg{display:flex;border:1px solid var(--line-strong);border-radius:10px;overflow:hidden;background:var(--panel-solid)}
+.seg button{flex:1;padding:8px 6px 7px;border:0;background:none;cursor:pointer;font-weight:600;font-size:13px;display:flex;align-items:center;justify-content:center;gap:6px}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button .sw{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.2)}
+.seg button[aria-pressed="true"]{background:var(--fg);color:var(--bg)}
+.row{display:flex;align-items:center;gap:10px;margin-top:10px}
+.chk{display:flex;align-items:center;gap:8px;cursor:pointer;padding:4px 0;user-select:none}
+.chk input{width:16px;height:16px;accent-color:var(--accent);margin:0}
+.hint{font-size:12px;color:var(--muted);margin-top:6px}
+kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:4px;padding:0 4px}
+.states{display:flex;flex-direction:column;gap:2px}
+.st{display:grid;grid-template-columns:34px 1fr 64px;align-items:center;gap:8px;padding:5px 6px;border-radius:8px;border:0;background:none;cursor:pointer;text-align:left}
+.st:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.st .ab{font-family:var(--mono);font-weight:700;font-size:12px;color:var(--muted)}
+.st .bar{height:7px;border-radius:4px;background:color-mix(in srgb,var(--line) 70%,transparent);overflow:hidden;display:flex}
+.st .bar i{background:var(--visited);height:100%}.st .bar b{background:var(--passed);height:100%}
+.st .n{font-family:var(--mono);font-size:12px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+.st .n b{color:var(--fg);font-weight:700}
+.st.done .ab{color:var(--visited)}
+.sortrow{display:flex;gap:6px;align-items:center;margin:-4px 0 8px;font-size:12px;color:var(--muted)}
+.sortrow button{border:0;background:none;padding:2px 6px;border-radius:6px;cursor:pointer;color:var(--muted)}
+.sortrow button[aria-pressed="true"]{color:var(--fg);background:color-mix(in srgb,var(--line) 70%,transparent);font-weight:600}
+.stats{display:flex;flex-direction:column;gap:10px}
+.stat .l{font-size:12px;color:var(--muted)}
+.stat .v{display:flex;align-items:baseline;gap:6px;margin:1px 0 4px}
+.stat .v b{font:700 20px/1.1 var(--font);letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.stat .v span{font-size:12px;color:var(--muted)}.stat .v i{font-style:normal;color:var(--fg);font-family:var(--mono);font-weight:700}
+.stat .bar{height:7px;border-radius:4px;background:color-mix(in srgb,var(--line) 70%,transparent);overflow:hidden}
+.stat .bar i{display:block;height:100%;background:var(--visited);width:0;transition:width .5s}
+.regions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.region{border:1px solid var(--line);border-radius:10px;padding:8px 10px 7px;background:var(--panel-solid);cursor:pointer;text-align:left}
+.region:hover{border-color:var(--fg)}
+.region .n{font-size:12px;font-weight:700}.region .c{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:1px}
+.region .bar{height:5px;border-radius:3px;background:color-mix(in srgb,var(--line) 70%,transparent);overflow:hidden;margin-top:5px}.region .bar i{display:block;height:100%;background:var(--visited)}
+.facts{display:flex;flex-direction:column;gap:5px;font-size:13px}
+.facts div{display:flex;justify-content:space-between;gap:10px}.facts span:first-child{color:var(--muted)}.facts span:last-child{text-align:right;font-weight:600}
+.facts button{border:0;background:none;padding:0;cursor:pointer;font-weight:600;text-align:right;text-decoration:underline dotted var(--line-strong);text-underline-offset:3px}
+.facts button:hover{color:var(--accent)}
+.layers{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}
+.tools{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.btn{padding:8px 12px 7px;border:1px solid var(--line-strong);border-radius:9px;background:var(--panel-solid);cursor:pointer;font-weight:600;font-size:13px;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:var(--fg)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.btn.danger{color:var(--danger)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn svg{width:14px;height:14px}
+.status{font-size:12px;color:var(--muted);margin-top:12px;display:flex;align-items:center;gap:6px}
+.status .pip{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.status.ok .pip{background:var(--visited)}.status.warn .pip{background:#e0a21d}
+.confirm{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13px}
+
+/* toast */
+.toast{position:absolute;left:50%;bottom:max(22px,env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);opacity:0;z-index:7;background:var(--fg);color:var(--bg);padding:10px 12px 9px 14px;border-radius:12px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow);transition:.25s;pointer-events:none;white-space:nowrap;max-width:calc(100vw - 32px)}
+.toast.on{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+.toast .sw{width:12px;height:12px;border-radius:3px}
+.toast button{border:0;background:color-mix(in srgb,var(--bg) 18%,transparent);color:var(--bg);padding:4px 10px;border-radius:7px;cursor:pointer;font-weight:700}
+
+/* legend + tooltip */
+.legend{position:absolute;right:max(12px,env(safe-area-inset-right,0px));top:14px;z-index:4;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12px;display:flex;gap:12px;backdrop-filter:blur(8px)}
+.legend span{display:flex;align-items:center;gap:6px}.legend i{width:14px;height:14px;border-radius:3px}
+.usmap-tooltip .tt{background:var(--panel-solid);color:var(--fg);border:1px solid var(--line);border-radius:9px;padding:7px 10px;box-shadow:var(--shadow);font-family:var(--font)}
+.usmap-tooltip .tt b{font-weight:700}.usmap-tooltip .tt .s{color:var(--muted);font-size:12px}
+.usmap-tooltip .tt .v{display:inline-flex;align-items:center;gap:5px;font-size:12px;margin-top:3px}.usmap-tooltip .tt .v i{width:9px;height:9px;border-radius:2px}
+
+/* loading */
+.loader{position:absolute;inset:0;z-index:8;display:flex;align-items:center;justify-content:center;background:var(--bg);transition:opacity .4s}
+.loader.off{opacity:0;pointer-events:none}
+.loader .box{text-align:center;width:min(360px,80vw)}
+.loader .name{font-weight:800;font-size:22px;letter-spacing:-.01em}
+.loader .bar{height:6px;border-radius:3px;background:var(--line);margin:14px 0 8px;overflow:hidden}
+.loader .bar i{display:block;height:100%;width:0;background:var(--visited);transition:width .2s}
+.loader .msg{color:var(--muted);font-size:13px}
+.painting #map canvas{cursor:crosshair !important}
+@media (max-width:720px){
+  .drawer{top:auto;bottom:0;left:0;width:100%;max-height:72%;border-radius:18px 18px 0 0;border-bottom:0;transition:transform .3s cubic-bezier(.2,.8,.2,1);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+  .drawer.collapsed{transform:translateY(calc(100% - 92px))}
+  .drawer.collapsed .toggle-btn svg{transform:rotate(180deg)}
+  .toggle-btn{display:flex}
+  .legend{top:auto;bottom:104px;right:10px}
+  .toast{bottom:auto;top:16px;transform:translate(-50%,-20px)}.toast.on{transform:translate(-50%,0)}
+  .count .big{font-size:28px}
+  #map .maplibregl-ctrl-bottom-right{margin-bottom:104px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none !important}}
+</style>
+
+<div id="map" aria-label="Map of US counties"></div>
+<div class="strip" aria-hidden="true"><i id="stripV"></i><b id="stripP"></b></div>
+
+<div class="legend" aria-label="Legend"><span><i style="background:var(--visited-fill)"></i>Visited</span><span><i style="background:var(--passed-fill)"></i>Drove through</span></div>
+
+<aside class="drawer" id="drawer">
+  <div class="head">
+    <div>
+      <p class="name">Spencer's County Log</p>
+      <div class="sub">Tap a county to log it. Drag to paint a whole route.</div>
+      <div class="count"><span class="big" id="nVisited">0</span><span class="of">of <span id="nTotal">3,142</span> counties ·&nbsp;<span id="pct">0%</span></span></div>
+      <div class="kpis"><span><i class="dot" style="background:var(--visited-fill)"></i><b id="kV">0</b> visited</span><span><i class="dot" style="background:var(--passed-fill)"></i><b id="kP">0</b> drove through</span><span><b id="kS">0</b>/50 states</span><span id="syncWrap" title="Sync status"><i class="pip" id="syncPip"></i></span></div>
+    </div>
+    <button class="toggle-btn" id="toggleDrawer" aria-label="Expand or collapse the log"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10l5-5 5 5"/></svg></button>
+  </div>
+  <div class="scroll">
+    <h3>Find a county or town</h3>
+    <div class="search">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+      <input id="q" type="search" placeholder="Travis, TX  ·  Marfa  ·  Door County" autocomplete="off" spellcheck="false" aria-label="Search counties and towns">
+      <div class="results" id="results" hidden></div>
+    </div>
+
+    <h3>Clicking marks</h3>
+    <div class="seg" role="group" aria-label="What a click marks">
+      <button data-mode="1" aria-pressed="true"><span class="sw" style="background:var(--visited-fill)"></span>Visited</button>
+      <button data-mode="2" aria-pressed="false"><span class="sw" style="background:var(--passed-fill)"></span>Drove through</button>
+      <button data-mode="0" aria-pressed="false">Erase</button>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="paint"> Paint mode (drag across counties)</label>
+    </div>
+    <div class="hint">Clicking a county that already has this mark removes it. Hold <kbd>Shift</kbd> to paint without turning paint mode on.</div>
+
+    <h3>By the numbers</h3>
+    <div class="stats">
+      <div class="stat"><div class="l">People who live in counties you've logged</div><div class="v"><b id="sPop">0</b><span>of <i id="sPopTotal">340M</i> ·&nbsp;<i id="sPopPct">0%</i></span></div><div class="bar"><i id="sPopBar"></i></div></div>
+      <div class="stat"><div class="l">Land area covered</div><div class="v"><b id="sArea">0</b><span>sq mi ·&nbsp;<i id="sAreaPct">0%</i> of the country</span></div><div class="bar"><i id="sAreaBar"></i></div></div>
+      <div class="regions" id="regions"></div>
+      <div class="facts" id="facts"></div>
+    </div>
+
+    <h3>States</h3>
+    <div class="sortrow">Sort by <button data-sort="name" aria-pressed="true">name</button><button data-sort="progress" aria-pressed="false">progress</button><button data-sort="remaining" aria-pressed="false">most left</button></div>
+    <div class="states" id="states"></div>
+
+    <h3>Map layers</h3>
+    <div class="layers">
+      <label class="chk"><input type="checkbox" data-layer="roads" checked> Roads &amp; highways</label>
+      <label class="chk"><input type="checkbox" data-layer="cities" checked> Cities &amp; towns</label>
+      <label class="chk"><input type="checkbox" data-layer="water" checked> Lakes &amp; rivers</label>
+      <label class="chk"><input type="checkbox" data-layer="countyLabels" checked> County names</label>
+      <label class="chk"><input type="checkbox" data-layer="urban" checked> Built-up areas</label>
+      <label class="chk"><input type="checkbox" data-layer="stateLabels" checked> State labels</label>
+    </div>
+
+    <h3>Your log</h3>
+    <div class="tools">
+      <button class="btn" id="undo" disabled><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3L2.5 6.5 6 10"/><path d="M3 6.5h6.5a4 4 0 010 8H8"/></svg>Undo</button>
+      <button class="btn" id="export">Back up (JSON)</button>
+      <label class="btn" for="importFile">Restore</label><input id="importFile" type="file" accept="application/json,.json" hidden>
+      <button class="btn danger" id="reset">Clear all</button>
+    </div>
+    <div class="confirm" id="resetConfirm" hidden>Erase every mark? <button class="btn danger" id="resetYes">Yes, clear</button><button class="btn" id="resetNo">Keep</button></div>
+    <div class="confirm" id="importConfirm" hidden><span id="importMsg"></span><button class="btn primary" id="importYes">Merge in</button><button class="btn" id="importNo">Cancel</button></div>
+    <div class="status" id="status"><span class="pip"></span><span id="statusText">Loading your log…</span></div>
+  </div>
+</aside>
+
+<div class="toast" id="toast" role="status"><span class="sw" id="toastSw"></span><span id="toastText"></span><button id="toastUndo">Undo</button></div>
+
+<div class="loader" id="loader"><div class="box"><div class="name">Spencer's County Log</div><div class="bar"><i id="loadBar"></i></div><div class="msg" id="loadMsg">Drawing 3,142 counties…</div></div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+<script src="engine/maplibre-css.js"></script>
+<script src="engine/usmap.js"></script>
+<script>
+(async () => {
+  const $ = s => document.querySelector(s);
+  const LS_KEY = 'county-log-v1';
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const fmt = n => n.toLocaleString('en-US');
+
+  /* ---------- state ---------- */
+  let marks = {};          // fips -> 1 visited | 2 drove through
+  let mode = 1;            // what a click sets
+  let history = [];        // [{fips, before}] for undo (last 50)
+  let sort = 'name';
+  const loadLocal = () => { try { const d = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); return d.marks || {}; } catch { return {}; } };
+  const saveLocal = () => { try { localStorage.setItem(LS_KEY, JSON.stringify({ marks, updated: Date.now() })); } catch {} };
+  marks = loadLocal();
+
+  /* ---------- map ---------- */
+  const loadBar = $('#loadBar'), loadMsg = $('#loadMsg');
+  const stageMsg = { counties: 'Drawing 3,142 counties…', water: 'Filling lakes and rivers…', urban: 'Shading built-up areas…', roads: 'Laying interstates and highways…', 'roads-minor': 'Adding state and county roads…' };
+  let pops = {};   // filled from data/population.json once the map is up; tooltips may fire before then
+  const short = n => n >= 1e6 ? (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(n);
+  const popPromise = fetch('data/population.json').then(r => r.ok ? r.json() : null).catch(() => null);
+  const m = await USMap.create({
+    container: '#map', dataRoot: 'data/', theme: 'auto', states: '50dc',
+    // claude.ai artifacts only serve known file types, so the glyph files are published there with an .otf name
+    glyphs: 'fonts/{fontstack}/{range}' + (/claude\.ai$|claudeusercontent/.test(location.hostname) ? '.otf' : '.pbf'),
+    fitPadding: matchMedia('(max-width:720px)').matches ? { top: 20, bottom: 110, left: 10, right: 10 } : { top: 30, bottom: 30, left: 400, right: 60 },
+    onProgress: (stage, pct) => { if (stage === 'counties') loadBar.style.width = Math.round(pct * 100) + '%'; if (stageMsg[stage]) loadMsg.textContent = stageMsg[stage]; },
+    tooltip: c => {
+      const v = marks[c.fips];
+      return `<div class="tt"><b>${c.name}${/city$/i.test(c.name) ? '' : ' County'}</b><div class="s">${c.stateName} · ${fmt(c.areaSqMi)} sq mi${pops[c.fips] ? ' · ' + short(pops[c.fips][0]) + ' people' : ''}</div>` +
+        (v ? `<div class="v"><i style="background:${v === 1 ? css('--visited-fill') : css('--passed-fill')}"></i>${v === 1 ? 'Visited' : 'Drove through'}</div>` : `<div class="v" style="color:var(--muted)">Not logged yet</div>`) + `</div>`;
+    },
+  });
+  $('#loader').classList.add('off');
+  const map = m.map;
+  const total = [...m.index.counties.values()].length;
+  $('#nTotal').textContent = fmt(total);
+  // Census population estimates + region codes: {fips: [pop, region, division]}
+  const popData = await popPromise;
+  pops = popData ? popData.counties : {};
+  const REGIONS = { 1: 'Northeast', 2: 'Midwest', 3: 'South', 4: 'West' };
+  const regionOf = f => (pops[f] || [0, 0])[1];
+  const totals = { pop: 0, area: 0, region: { 1: [0, 0], 2: [0, 0], 3: [0, 0], 4: [0, 0] } };
+  for (const c of m.index.counties.values()) { totals.pop += (pops[c.fips] || [0])[0]; totals.area += c.areaSqMi; const r = regionOf(c.fips); if (totals.region[r]) totals.region[r][1]++; }
+  $('#sPopTotal').textContent = short(totals.pop);
+
+  // county colour comes from feature-state v (1|2), so a theme change only swaps paint
+  const applyPaint = () => {
+    m.setCountyPaint(['match', ['coalesce', ['feature-state', 'v'], 0], 1, css('--visited-fill'), 2, css('--passed-fill'), 'rgba(0,0,0,0)'],
+      ['match', ['coalesce', ['feature-state', 'v'], 0], 1, 0.62, 2, 0.5, 0]);
+  };
+  applyPaint();
+  m.on('theme', applyPaint);
+  const paintAll = () => { for (const fips of m.index.counties.keys()) m.setCountyState(fips, { v: marks[fips] || 0 }); };
+  paintAll();
+
+  /* ---------- stats + state list ---------- */
+  const stateRows = new Map();
+  const statesEl = $('#states');
+  const stateOrder = () => {
+    const arr = [...m.index.states.values()].filter(s => s.fips <= '56');
+    const prog = s => s.counties.filter(f => marks[f]).length / s.counties.length;
+    if (sort === 'progress') arr.sort((a, b) => prog(b) - prog(a) || a.name.localeCompare(b.name));
+    else if (sort === 'remaining') arr.sort((a, b) => (b.counties.length - b.counties.filter(f => marks[f]).length) - (a.counties.length - a.counties.filter(f => marks[f]).length));
+    else arr.sort((a, b) => a.name.localeCompare(b.name));
+    return arr;
+  };
+  const renderStates = () => {
+    const frag = document.createDocumentFragment();
+    for (const s of stateOrder()) {
+      let row = stateRows.get(s.fips);
+      if (!row) {
+        row = document.createElement('button'); row.className = 'st'; row.title = `Zoom to ${s.name}`;
+        row.innerHTML = `<span class="ab">${s.abbr}</span><span><div style="font-size:13px;margin-bottom:3px">${s.name}</div><div class="bar"><i></i><b></b></div></span><span class="n"></span>`;
+        row.addEventListener('click', () => { m.flyToState(s.fips); collapseOnPhone(); });
+        stateRows.set(s.fips, row);
+      }
+      const v = s.counties.filter(f => marks[f] === 1).length, p = s.counties.filter(f => marks[f] === 2).length, n = s.counties.length;
+      row.querySelector('.bar i').style.width = (100 * v / n) + '%'; row.querySelector('.bar b').style.width = (100 * p / n) + '%';
+      row.querySelector('.n').innerHTML = `<b>${v + p}</b>/${n}`;
+      row.classList.toggle('done', v + p === n);
+      frag.appendChild(row);
+    }
+    statesEl.replaceChildren(frag);
+  };
+  const renderStats = () => {
+    let v = 0, p = 0; const st = new Set();
+    for (const [f, k] of Object.entries(marks)) { if (!m.index.counties.has(f)) continue; if (k === 1) v++; else if (k === 2) p++; if (k) st.add(f.slice(0, 2)); }
+    st.delete('11');
+    $('#nVisited').textContent = fmt(v + p); $('#kV').textContent = fmt(v); $('#kP').textContent = fmt(p); $('#kS').textContent = st.size;
+    $('#pct').textContent = (100 * (v + p) / total).toFixed(1).replace(/\.0$/, '') + '%';
+    $('#stripV').style.width = (100 * v / total) + '%'; $('#stripP').style.left = (100 * v / total) + '%'; $('#stripP').style.width = (100 * p / total) + '%';
+    renderNumbers();
+    renderStates();
+    $('#undo').disabled = !history.length;
+  };
+  const pct = (a, b, d = 1) => (b ? (100 * a / b) : 0).toFixed(d).replace(/\.0$/, '') + '%';
+  const renderNumbers = () => {
+    let pop = 0, area = 0, biggest = null, mostPeople = null, smallest = null;
+    const region = { 1: 0, 2: 0, 3: 0, 4: 0 }; const stateDone = []; const touched = new Set();
+    for (const f of Object.keys(marks)) {
+      const c = m.index.counties.get(f); if (!c || !marks[f]) continue;
+      const P = (pops[f] || [0])[0]; pop += P; area += c.areaSqMi; region[regionOf(f)]++; touched.add(f.slice(0, 2));
+      if (!biggest || c.areaSqMi > biggest.areaSqMi) biggest = c;
+      if (!smallest || c.areaSqMi < smallest.areaSqMi) smallest = c;
+      if (!mostPeople || P > (pops[mostPeople.fips] || [0])[0]) mostPeople = c;
+    }
+    for (const s of m.index.states.values()) if (s.fips <= '56' && s.fips !== '11' && s.counties.every(f => marks[f])) stateDone.push(s.abbr);
+    $('#sPop').textContent = short(pop); $('#sPopPct').textContent = pct(pop, totals.pop); $('#sPopBar').style.width = pct(pop, totals.pop, 2);
+    $('#sArea').textContent = fmt(Math.round(area)); $('#sAreaPct').textContent = pct(area, totals.area); $('#sAreaBar').style.width = pct(area, totals.area, 2);
+    const regionsEl = $('#regions');
+    if (!regionsEl.childElementCount) for (const r of [1, 2, 3, 4]) { const b = document.createElement('button'); b.className = 'region'; b.dataset.r = r; b.title = 'Zoom to the ' + REGIONS[r]; b.innerHTML = `<div class="n">${REGIONS[r]}</div><div class="c"></div><div class="bar"><i></i></div>`; b.addEventListener('click', () => { m.fitCounties([...m.index.counties.keys()].filter(f => regionOf(f) === r)); collapseOnPhone(); }); regionsEl.appendChild(b); }
+    for (const b of regionsEl.children) { const r = +b.dataset.r; b.querySelector('.c').textContent = `${region[r]} / ${fmt(totals.region[r][1])} · ${pct(region[r], totals.region[r][1])}`; b.querySelector('.bar i').style.width = pct(region[r], totals.region[r][1], 2); }
+    const name = c => `${c.name}, ${c.stateAbbr}`;
+    const link = c => c ? `<button data-fly="${c.fips}">${name(c)}</button>` : '<span>—</span>';
+    const n = Object.keys(marks).length;
+    $('#facts').innerHTML = `
+      <div><span>States touched</span><span>${touched.size} of 50</span></div>
+      <div><span>States completed</span><span>${stateDone.length ? stateDone.join(', ') : 'none yet'}</span></div>
+      <div><span>Largest county logged</span>${biggest ? `<span>${link(biggest)} · ${fmt(biggest.areaSqMi)} sq mi</span>` : '<span>—</span>'}</div>
+      <div><span>Smallest</span>${smallest ? `<span>${link(smallest)} · ${fmt(smallest.areaSqMi)} sq mi</span>` : '<span>—</span>'}</div>
+      <div><span>Most people</span>${mostPeople ? `<span>${link(mostPeople)} · ${short((pops[mostPeople.fips] || [0])[0])}</span>` : '<span>—</span>'}</div>
+      <div><span>Average county you've logged</span><span>${n ? fmt(Math.round(area / n)) + ' sq mi · ' + short(Math.round(pop / n)) + ' people' : '—'}</span></div>
+      <div><span>Next milestone</span><span>${nextMilestone(n)}</span></div>`;
+    $('#facts').querySelectorAll('[data-fly]').forEach(b => b.addEventListener('click', () => { m.flyToCounty(b.dataset.fly); m.select(b.dataset.fly); setTimeout(() => m.select(null), 2500); collapseOnPhone(); }));
+  };
+  const nextMilestone = n => { const steps = [10, 25, 50, 100, 250, 500, 1000, 1571, 2000, 2500, 3000, 3142]; const t = steps.find(x => x > n); return t ? `${fmt(t - n)} more to ${t === 1571 ? 'half the country' : t === 3142 ? 'all of them' : fmt(t)}` : 'Every county. Done.'; };
+  renderStats();
+  document.querySelectorAll('.sortrow button').forEach(b => b.addEventListener('click', () => { sort = b.dataset.sort; document.querySelectorAll('.sortrow button').forEach(x => x.setAttribute('aria-pressed', x === b)); renderStates(); }));
+
+  /* ---------- persistence: account (db) with the browser as a fallback ----------
+     Rules that keep clicks from being lost:
+     - local `marks` is the source of truth while the user is working; the account copy follows it
+     - an incoming snapshot never replaces local marks while a write is pending or in flight
+     - snapshots that are just echoes of our own writes (same or older `updated` stamp) are ignored
+     - a write that hangs is abandoned after 15 s so later writes are not blocked behind it */
+  const status = (cls, text) => { const s = $('#status'); s.className = 'status ' + cls; $('#statusText').textContent = text; const pip = $('#syncPip'); if (pip) { pip.className = 'pip ' + cls; pip.title = text; } };
+  let doc = null, writing = false, dirty = false, timer = null, lastWritten = 0, failures = 0;
+  const clock = ts => new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const flush = async () => {
+    if (!doc || writing) return; writing = true; dirty = false;
+    const stamp = Date.now(); const snapshot = JSON.stringify(marks);
+    try {
+      await Promise.race([doc.set({ marks: JSON.parse(snapshot), updated: stamp, version: 1 }), new Promise((_, rej) => setTimeout(() => rej({ code: 'timeout' }), 15000))]);
+      lastWritten = stamp; failures = 0; status('ok', 'Saved to your account · ' + clock(stamp));
+    } catch (e) {
+      failures++; dirty = true;
+      status('warn', `Saved on this device; account sync ${e.code === 'timeout' ? 'is slow' : 'failed (' + (e.code || 'error') + ')'} — retrying`);
+      setTimeout(() => { if (dirty) flush(); }, Math.min(30000, 2000 * failures));
+    }
+    writing = false; if (dirty) { clearTimeout(timer); timer = setTimeout(flush, 500); }
+  };
+  const persist = () => { saveLocal(); dirty = true; if (doc) { status('', 'Saving…'); clearTimeout(timer); timer = setTimeout(flush, 900); } };
+  window.addEventListener('pagehide', () => { if (doc && dirty && !writing) { clearTimeout(timer); flush(); } });
+  (async () => {
+    const db = window.claude ? await window.claude.use('db') : null;
+    if (!db) { status('warn', 'Saved on this device only. Sign in to keep it on your account.'); return; }
+    doc = db.doc('tracker/counties');
+    let first = true; const t = setTimeout(() => status('warn', 'Account data is slow to load; showing this device’s copy'), 10000);
+    doc.onSnapshot(snap => {
+      clearTimeout(t);
+      const data = snap.exists ? snap.data() : {}; const remote = data.marks || {}; const remoteStamp = data.updated || 0;
+      if (first) {
+        first = false;
+        const merged = Object.assign({}, remote, marks);   // union: nothing logged on any device is lost
+        marks = merged; paintAll(); renderStats(); saveLocal();
+        if (JSON.stringify(merged) !== JSON.stringify(remote)) { dirty = true; flush(); } else { lastWritten = remoteStamp; status('ok', 'Saved to your account' + (remoteStamp ? ' · ' + clock(remoteStamp) : '')); }
+        return;
+      }
+      if (snap.metadata.hasPendingWrites || writing || dirty) return;      // our own work is in flight; the server copy is behind us
+      if (remoteStamp <= lastWritten) return;                               // echo of something we already wrote
+      // a newer copy from another device, and nothing pending here: adopt it
+      if (JSON.stringify(remote) !== JSON.stringify(marks)) { marks = remote; paintAll(); renderStats(); saveLocal(); }
+      lastWritten = remoteStamp; status('ok', 'Updated from another device · ' + clock(remoteStamp));
+    }, e => status('warn', 'Account sync unavailable (' + e.code + '); saving on this device'));
+  })();
+
+  /* ---------- marking ---------- */
+  const toast = $('#toast'); let toastTimer;
+  const showToast = (c, v) => {
+    $('#toastSw').style.background = v === 1 ? css('--visited-fill') : v === 2 ? css('--passed-fill') : 'transparent';
+    $('#toastText').textContent = `${c.name}, ${c.stateAbbr} — ${v === 1 ? 'visited' : v === 2 ? 'drove through' : 'cleared'}`;
+    toast.classList.add('on'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('on'), 2600);
+  };
+  const setMark = (fips, v, { quiet } = {}) => {
+    const before = marks[fips] || 0; if (before === v) return false;
+    history.push({ fips, before }); if (history.length > 50) history.shift();
+    if (v) marks[fips] = v; else delete marks[fips];
+    m.setCountyState(fips, { v }); renderStats(); persist();
+    if (!quiet) showToast(m.county(fips), v);
+    return true;
+  };
+  const toggle = fips => { const cur = marks[fips] || 0; setMark(fips, cur === mode ? 0 : mode); };
+  const undo = () => { const h = history.pop(); if (!h) return; if (h.before) marks[h.fips] = h.before; else delete marks[h.fips]; m.setCountyState(h.fips, { v: h.before }); renderStats(); persist(); toast.classList.remove('on'); };
+  $('#undo').addEventListener('click', undo); $('#toastUndo').addEventListener('click', undo);
+  document.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'z' && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); undo(); } });
+  document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => { mode = +b.dataset.mode; document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b)); }));
+
+  // click = toggle; paint mode / shift-drag = set the current mode on every county the pointer crosses
+  let painting = false, painted = new Set();
+  const paintOn = $('#paint');
+  const beginPaint = () => { painting = true; painted = new Set(); map.dragPan.disable(); document.body.classList.add('painting'); };
+  const endPaint = () => { if (!painting) return; painting = false; map.dragPan.enable(); document.body.classList.remove('painting'); if (painted.size) { const c = m.county([...painted].pop()); $('#toastText').textContent = `${painted.size} ${painted.size === 1 ? 'county' : 'counties'} ${mode === 1 ? 'marked visited' : mode === 2 ? 'marked drove through' : 'cleared'}`; $('#toastSw').style.background = mode === 1 ? css('--visited-fill') : mode === 2 ? css('--passed-fill') : 'transparent'; toast.classList.add('on'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('on'), 3000); } };
+  const paintAt = point => { const f = map.queryRenderedFeatures(point, { layers: ['county-fill'] })[0]; if (!f) return; const fips = String(f.id).padStart(5, '0'); if (painted.has(fips)) return; painted.add(fips); setMark(fips, mode, { quiet: true }); };
+  map.on('mousedown', e => { if (paintOn.checked || e.originalEvent.shiftKey) { beginPaint(); paintAt(e.point); } });
+  map.on('mousemove', e => { if (painting) paintAt(e.point); });
+  window.addEventListener('mouseup', endPaint);
+  map.on('touchstart', e => { if (paintOn.checked && e.points.length === 1) { beginPaint(); paintAt(e.point); } });
+  map.on('touchmove', e => { if (painting && e.points.length === 1) { e.preventDefault(); paintAt(e.point); } });
+  map.on('touchend', endPaint); map.on('touchcancel', endPaint);
+  paintOn.addEventListener('change', () => { document.body.classList.toggle('painting', paintOn.checked); map.dragPan[paintOn.checked ? 'disable' : 'enable'](); });
+  m.on('county:click', e => { if (painting || paintOn.checked || e.originalEvent.shiftKey) return; toggle(e.fips); });
+
+  /* ---------- search ---------- */
+  const q = $('#q'), results = $('#results'); let active = -1, hits = [];
+  const renderResults = () => {
+    if (!hits.length) { results.hidden = true; return; }
+    results.innerHTML = hits.map((h, i) => `<button class="${i === active ? 'active' : ''}" data-i="${i}"><div class="l">${h.label}${h.kind === 'county' ? (/city$/i.test(h.label) ? '' : ' County') : ''}</div><div class="s">${h.sub}${h.kind === 'county' && marks[h.fips] ? ' · ' + (marks[h.fips] === 1 ? 'visited' : 'drove through') : ''}</div></button>`).join('');
+    results.hidden = false;
+  };
+  const go = h => {
+    results.hidden = true; q.value = h.label; collapseOnPhone();
+    if (h.kind === 'county') { m.flyToCounty(h.fips); m.select(h.fips); setTimeout(() => m.select(null), 2500); }
+    else { m.flyToCity(h.city, { zoom: 9.5 }); if (h.fips) { m.select(h.fips); setTimeout(() => m.select(null), 2500); } }
+  };
+  q.addEventListener('input', () => { hits = m.search(q.value, { limit: 10 }); active = -1; renderResults(); });
+  q.addEventListener('keydown', e => { if (e.key === 'ArrowDown') { active = Math.min(hits.length - 1, active + 1); renderResults(); e.preventDefault(); } else if (e.key === 'ArrowUp') { active = Math.max(0, active - 1); renderResults(); e.preventDefault(); } else if (e.key === 'Enter') { if (hits[active >= 0 ? active : 0]) go(hits[active >= 0 ? active : 0]); } else if (e.key === 'Escape') { results.hidden = true; } });
+  results.addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(hits[+b.dataset.i]); });
+  document.addEventListener('click', e => { if (!e.target.closest('.search')) results.hidden = true; });
+
+  /* ---------- layers ---------- */
+  document.querySelectorAll('[data-layer]').forEach(cb => cb.addEventListener('change', () => m.setLayerVisible(cb.dataset.layer, cb.checked)));
+
+  /* ---------- backup / restore / clear ---------- */
+  const downloads = window.claude ? await window.claude.use('downloads') : null;
+  $('#export').addEventListener('click', async () => {
+    const payload = JSON.stringify({ app: 'county-log', version: 1, exported: new Date().toISOString(), counties: Object.entries(marks).map(([fips, v]) => { const c = m.county(fips); return { fips, name: c ? c.name : '', state: c ? c.stateAbbr : '', status: v === 1 ? 'visited' : 'drove_through' }; }) }, null, 1);
+    const name = `county-log-${new Date().toISOString().slice(0, 10)}.json`;
+    if (downloads) { try { await downloads.save({ filename: name, data: payload }); } catch (e) { if (e.code !== 'declined') fallbackCopy(payload); } }
+    else fallbackCopy(payload);
+  });
+  const fallbackCopy = async text => { try { await navigator.clipboard.writeText(text); status('ok', 'Backup copied to the clipboard — paste it into a file to keep it'); } catch { status('warn', 'Could not save or copy the backup here'); } };
+  let pending = null;
+  $('#importFile').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const d = JSON.parse(await f.text()); const inc = {};
+      (d.counties || []).forEach(r => { if (m.index.counties.has(r.fips)) inc[r.fips] = r.status === 'drove_through' ? 2 : 1; });
+      if (d.marks) Object.assign(inc, d.marks);
+      const n = Object.keys(inc).length; const fresh = Object.keys(inc).filter(k => !marks[k]).length;
+      pending = inc; $('#importMsg').textContent = `${n} counties in this file, ${fresh} not yet in your log.`; $('#importConfirm').hidden = false;
+    } catch { status('warn', 'That file is not a county-log backup'); }
+    e.target.value = '';
+  });
+  $('#importYes').addEventListener('click', () => { if (!pending) return; for (const [k, v] of Object.entries(pending)) if (!marks[k]) setMark(k, v, { quiet: true }); pending = null; $('#importConfirm').hidden = true; status('ok', 'Restored'); });
+  $('#importNo').addEventListener('click', () => { pending = null; $('#importConfirm').hidden = true; });
+  $('#reset').addEventListener('click', () => { $('#resetConfirm').hidden = false; });
+  $('#resetNo').addEventListener('click', () => { $('#resetConfirm').hidden = true; });
+  $('#resetYes').addEventListener('click', () => { for (const k of Object.keys(marks)) setMark(k, 0, { quiet: true }); $('#resetConfirm').hidden = true; });
+
+  /* ---------- phone drawer ---------- */
+  const drawer = $('#drawer');
+  const isPhone = () => matchMedia('(max-width:720px)').matches;
+  const collapseOnPhone = () => { if (isPhone()) drawer.classList.add('collapsed'); };
+  if (isPhone()) drawer.classList.add('collapsed');
+  $('#toggleDrawer').addEventListener('click', () => drawer.classList.toggle('collapsed'));
+  $('#drawer .head').addEventListener('click', e => { if (isPhone() && !e.target.closest('button')) drawer.classList.toggle('collapsed'); });
+})().catch(e => { console.error(e); const l = document.getElementById('loadMsg'); if (l) l.textContent = 'Could not load the map: ' + e.message; });
+</script>
