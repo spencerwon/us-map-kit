@@ -1,0 +1,3 @@
+#!/bin/bash
+# Opens Spencer's County Log (the live page, with account sync) in the default browser.
+open "https://claude.ai/artifact/Pa2cDkYbWwc7x4mhXxjwuq"

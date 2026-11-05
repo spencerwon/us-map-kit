@@ -15,7 +15,10 @@ It ships with two apps:
 ```
 us-map-kit/
 ├── county-tracker.html        the tracker app
-├── serve.command              double-click on a Mac: starts a local server and opens the tracker
+├── County Log.app             double-click: opens the live tracker (claude.ai)
+├── County Log (offline).app   double-click: runs the tracker from this folder
+├── Map Kit Example.app        double-click: runs the choropleth example
+├── serve.command              same as the offline app, but keeps a Terminal window open
 ├── apps/
 │   └── political-example.html choropleth template with synthetic data
 ├── engine/
@@ -41,7 +44,24 @@ us-map-kit/
     └── POLITICAL.md           recipe for polling / election maps
 ```
 
-## Running it on your Mac
+## Opening it (the short version)
+
+Three double-clickable apps sit in the kit folder:
+
+| App | Opens |
+|---|---|
+| **County Log.app** | the live tracker on claude.ai, with your account-synced log |
+| **County Log (offline).app** | the same tracker served from this folder (saves to the browser only) |
+| **Map Kit Example.app** | the political choropleth template |
+
+Drag any of them to the Dock or the Desktop. The first time, macOS may say the app is from an
+unidentified developer: right-click → Open, once. (Cloning with GitHub Desktop avoids that
+entirely; only files downloaded as a zip get the warning.)
+
+For a real Dock app for the live page, Safari can also do it: open the tracker in Safari, then
+File → Add to Dock. That keeps your claude.ai login and opens in its own window.
+
+## Running it on your Mac (the longer version)
 
 1. Unzip the kit anywhere (Documents is fine).
 2. Double-click **`serve.command`**. A Terminal window opens, and the tracker opens in your browser at

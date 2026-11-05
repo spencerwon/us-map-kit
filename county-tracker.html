@@ -46,6 +46,7 @@ button,input{font:inherit;color:inherit}
 .kpis b{color:var(--fg);font-family:var(--mono);font-weight:700}
 .kpis .dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 .kpis .pip{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);vertical-align:0}.kpis .pip.ok{background:var(--visited)}.kpis .pip.warn{background:#e0a21d}
+.sub.sync{margin-top:3px;font-weight:600}.sub.sync.ok{color:var(--visited)}.sub.sync.warn,.sub.sync.pending{color:#b7830f}.sub.sync.local{color:var(--muted)}
 .toggle-btn{margin-left:auto;flex:none;width:32px;height:32px;border:1px solid var(--line);border-radius:9px;background:transparent;cursor:pointer;display:none;align-items:center;justify-content:center}
 .toggle-btn svg{width:16px;height:16px;transition:transform .25s}
 h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px;font-weight:700}
@@ -154,6 +155,7 @@ kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line-strong);b
     <div>
       <p class="name">Spencer's County Log</p>
       <div class="sub">Tap a county to log it. Drag to paint a whole route.</div>
+      <div class="sub sync" id="syncLine">Loading your log…</div>
       <div class="count"><span class="big" id="nVisited">0</span><span class="of">of <span id="nTotal">3,142</span> counties ·&nbsp;<span id="pct">0%</span></span></div>
       <div class="kpis"><span><i class="dot" style="background:var(--visited-fill)"></i><b id="kV">0</b> visited</span><span><i class="dot" style="background:var(--passed-fill)"></i><b id="kP">0</b> drove through</span><span><b id="kS">0</b>/50 states</span><span id="syncWrap" title="Sync status"><i class="pip" id="syncPip"></i></span></div>
     </div>
@@ -203,6 +205,7 @@ kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line-strong);b
     <h3>Your log</h3>
     <div class="tools">
       <button class="btn" id="undo" disabled><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3L2.5 6.5 6 10"/><path d="M3 6.5h6.5a4 4 0 010 8H8"/></svg>Undo</button>
+      <button class="btn primary" id="syncNow" hidden>Sync now</button>
       <button class="btn" id="export">Back up (JSON)</button>
       <label class="btn" for="importFile">Restore</label><input id="importFile" type="file" accept="application/json,.json" hidden>
       <button class="btn danger" id="reset">Clear all</button>
@@ -357,46 +360,78 @@ kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line-strong);b
      - local `marks` is the source of truth while the user is working; the account copy follows it
      - an incoming snapshot never replaces local marks while a write is pending or in flight
      - snapshots that are just echoes of our own writes (same or older `updated` stamp) are ignored
-     - a write that hangs is abandoned after 15 s so later writes are not blocked behind it */
-  const status = (cls, text) => { const s = $('#status'); s.className = 'status ' + cls; $('#statusText').textContent = text; const pip = $('#syncPip'); if (pip) { pip.className = 'pip ' + cls; pip.title = text; } };
-  let doc = null, writing = false, dirty = false, timer = null, lastWritten = 0, failures = 0;
+     - writes are coalesced: at most one every WRITE_GAP ms while you keep clicking (the account
+       database rate-limits per viewer, and a fast painting stroke used to burn through that)
+     - a write that hangs is abandoned after 15 s; a rejected write backs off and retries
+     - the sync line in the header always says what is going on, with the number of unsaved changes */
+  const WRITE_GAP = 4000;
+  let doc = null, writing = false, dirty = false, timer = null, lastWritten = 0, lastAttempt = 0, failures = 0, pendingSince = 0, unsynced = 0, syncState = 'local', syncNote = '';
   const clock = ts => new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const syncLine = $('#syncLine'), syncPip = $('#syncPip'), syncBtn = $('#syncNow');
+  const status = (cls, text) => { syncState = cls; syncNote = text; renderSync(); };
+  const renderSync = () => {
+    const s = $('#status'); s.className = 'status ' + (syncState === 'ok' ? 'ok' : syncState === 'warn' ? 'warn' : '');
+    const waiting = unsynced ? ` · ${unsynced} unsaved ${unsynced === 1 ? 'change' : 'changes'}` : '';
+    $('#statusText').textContent = syncNote + waiting;
+    syncPip.className = 'pip ' + (syncState === 'ok' && !unsynced ? 'ok' : syncState === 'warn' ? 'warn' : '');
+    syncLine.textContent = syncState === 'local' ? 'Saved on this device only' : syncState === 'ok' && !unsynced ? `Synced to your account · ${clock(lastWritten || Date.now())}` : syncState === 'warn' ? `Not synced${waiting} — ${syncNote}` : `Saving${waiting}…`;
+    syncLine.className = 'sub sync ' + syncState + (unsynced ? ' pending' : '');
+    syncBtn.hidden = !(doc && unsynced && !writing);
+  };
   const flush = async () => {
-    if (!doc || writing) return; writing = true; dirty = false;
-    const stamp = Date.now(); const snapshot = JSON.stringify(marks);
+    if (!doc || writing) return;
+    const wait = WRITE_GAP - (Date.now() - lastAttempt);
+    if (wait > 0) { clearTimeout(timer); timer = setTimeout(flush, wait); return; }
+    writing = true; dirty = false; lastAttempt = Date.now(); renderSync();
+    const stamp = Date.now(); const snapshot = JSON.stringify(marks); const count = unsynced;
     try {
       await Promise.race([doc.set({ marks: JSON.parse(snapshot), updated: stamp, version: 1 }), new Promise((_, rej) => setTimeout(() => rej({ code: 'timeout' }), 15000))]);
-      lastWritten = stamp; failures = 0; status('ok', 'Saved to your account · ' + clock(stamp));
+      lastWritten = stamp; failures = 0; unsynced = dirty ? Math.max(0, unsynced - count) : 0;
+      status('ok', 'Saved to your account · ' + clock(stamp));
     } catch (e) {
       failures++; dirty = true;
-      status('warn', `Saved on this device; account sync ${e.code === 'timeout' ? 'is slow' : 'failed (' + (e.code || 'error') + ')'} — retrying`);
-      setTimeout(() => { if (dirty) flush(); }, Math.min(30000, 2000 * failures));
+      const slow = e.code === 'resource_exhausted' || e.code === 'timeout';
+      const delay = Math.min(120000, (slow ? 15000 : 3000) * failures);
+      status('warn', e.code === 'resource_exhausted' ? `account is rate-limiting saves, retrying in ${Math.round(delay / 1000)}s` : e.code === 'timeout' ? `save is taking too long, retrying in ${Math.round(delay / 1000)}s` : `save failed (${e.code || 'error'}), retrying in ${Math.round(delay / 1000)}s`);
+      clearTimeout(timer); timer = setTimeout(flush, delay);
+      writing = false; renderSync(); return;
     }
-    writing = false; if (dirty) { clearTimeout(timer); timer = setTimeout(flush, 500); }
+    writing = false; renderSync();
+    if (dirty) { clearTimeout(timer); timer = setTimeout(flush, WRITE_GAP); }
   };
-  const persist = () => { saveLocal(); dirty = true; if (doc) { status('', 'Saving…'); clearTimeout(timer); timer = setTimeout(flush, 900); } };
-  window.addEventListener('pagehide', () => { if (doc && dirty && !writing) { clearTimeout(timer); flush(); } });
+  const persist = () => { saveLocal(); unsynced++; dirty = true; if (!pendingSince) pendingSince = Date.now(); if (doc) { if (!failures) syncState = 'saving'; renderSync(); if (!writing) { clearTimeout(timer); timer = setTimeout(flush, failures ? Math.min(120000, 15000 * failures) : 1200); } } else renderSync(); };
+  syncBtn.addEventListener('click', () => { failures = 0; lastAttempt = 0; clearTimeout(timer); flush(); });
+  window.addEventListener('pagehide', () => { if (doc && dirty && !writing) { clearTimeout(timer); lastAttempt = 0; flush(); } });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && doc && dirty && !writing) { clearTimeout(timer); lastAttempt = 0; flush(); } });
   (async () => {
     const db = window.claude ? await window.claude.use('db') : null;
-    if (!db) { status('warn', 'Saved on this device only. Sign in to keep it on your account.'); return; }
+    if (!db) { status('local', 'Saved on this device only. Open this page inside claude.ai to keep it on your account.'); return; }
     doc = db.doc('tracker/counties');
-    let first = true; const t = setTimeout(() => status('warn', 'Account data is slow to load; showing this device’s copy'), 10000);
-    doc.onSnapshot(snap => {
-      clearTimeout(t);
-      const data = snap.exists ? snap.data() : {}; const remote = data.marks || {}; const remoteStamp = data.updated || 0;
-      if (first) {
-        first = false;
-        const merged = Object.assign({}, remote, marks);   // union: nothing logged on any device is lost
-        marks = merged; paintAll(); renderStats(); saveLocal();
-        if (JSON.stringify(merged) !== JSON.stringify(remote)) { dirty = true; flush(); } else { lastWritten = remoteStamp; status('ok', 'Saved to your account' + (remoteStamp ? ' · ' + clock(remoteStamp) : '')); }
-        return;
-      }
-      if (snap.metadata.hasPendingWrites || writing || dirty) return;      // our own work is in flight; the server copy is behind us
-      if (remoteStamp <= lastWritten) return;                               // echo of something we already wrote
-      // a newer copy from another device, and nothing pending here: adopt it
-      if (JSON.stringify(remote) !== JSON.stringify(marks)) { marks = remote; paintAll(); renderStats(); saveLocal(); }
-      lastWritten = remoteStamp; status('ok', 'Updated from another device · ' + clock(remoteStamp));
-    }, e => status('warn', 'Account sync unavailable (' + e.code + '); saving on this device'));
+    let first = true, resubscribes = 0;
+    const subscribe = () => {
+      const t = setTimeout(() => { if (first) status('warn', 'account data is slow to load; showing this device’s copy'); }, 10000);
+      doc.onSnapshot(snap => {
+        clearTimeout(t);
+        const data = snap.exists ? snap.data() : {}; const remote = data.marks || {}; const remoteStamp = data.updated || 0;
+        if (first) {
+          first = false;
+          const merged = Object.assign({}, remote, marks);   // union: nothing logged on any device is lost
+          marks = merged; paintAll(); renderStats(); saveLocal();
+          if (JSON.stringify(merged) !== JSON.stringify(remote)) { unsynced = Math.max(unsynced, 1); dirty = true; lastAttempt = 0; flush(); }
+          else { lastWritten = remoteStamp; unsynced = 0; status('ok', 'Saved to your account' + (remoteStamp ? ' · ' + clock(remoteStamp) : '')); }
+          return;
+        }
+        if (snap.metadata.hasPendingWrites || writing || dirty) return;      // our own work is in flight; the server copy is behind us
+        if (remoteStamp <= lastWritten) return;                               // echo of something we already wrote
+        if (JSON.stringify(remote) !== JSON.stringify(marks)) { marks = remote; paintAll(); renderStats(); saveLocal(); }
+        lastWritten = remoteStamp; status('ok', 'Updated from another device · ' + clock(remoteStamp));
+      }, e => {
+        // the live feed died (usually resource_exhausted after a burst); saving still works, so keep going and re-listen later
+        status('warn', `live feed from your account stopped (${e.code}); saves still go through`);
+        if (resubscribes++ < 5) setTimeout(subscribe, 60000 * resubscribes);
+      });
+    };
+    subscribe();
   })();
 
   /* ---------- marking ---------- */
